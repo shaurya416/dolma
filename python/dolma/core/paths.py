@@ -354,6 +354,9 @@ def make_relative(paths: List[str]) -> Tuple[str, List[str]]:
         if current_prot != common_prot:
             raise ValueError(f"Protocols of {path} and {paths[0]} do not match")
 
+        # the shared root can never be longer than any one of the paths
+        common_parts = common_parts[: len(current_parts)]
+
         for i in range(min(len(common_parts), len(current_parts))):
             if common_parts[i] != current_parts[i]:
                 common_parts = common_parts[:i]

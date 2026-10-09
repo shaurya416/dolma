@@ -65,6 +65,35 @@ class TestRuntimeUtilities(TestCase):
             ],
         )
 
+    def test_make_paths_from_prefix_nested_sources(self):
+        # a source listed after a deeper one must still map under the new prefix, not back
+        # onto its own source directory.
+        new_paths = _make_paths_from_prefix(
+            paths=["/data/documents/sub/*.json.gz", "/data/documents/*.json.gz"],
+            prefix="/out/exp",
+        )
+        self.assertEqual(new_paths, ["/out/exp/sub", "/out/exp"])
+
+    def test_nested_documents_are_all_tagged(self):
+        with TemporaryDirectory() as temp_dir:
+            documents_dir = Path(temp_dir) / "documents"
+            (documents_dir / "sub").mkdir(parents=True)
+            source = LOCAL_DATA / "provided/documents/000.json.gz"
+            shutil.copy(source, documents_dir / "sub" / "a.json.gz")
+            shutil.copy(source, documents_dir / "b.json.gz")
+            destination = Path(temp_dir) / "out"
+
+            create_and_run_tagger(
+                documents=[f"{documents_dir}/sub/*.json.gz", f"{documents_dir}/*.json.gz"],
+                destination=str(destination),
+                taggers=["c4_v1"],
+                experiment="test",
+                debug=True,
+            )
+
+            self.assertTrue((destination / "test" / "sub" / "a.json.gz").exists())
+            self.assertTrue((destination / "test" / "b.json.gz").exists())
+
     def test_runtime_e2e(self):
         documents_path = f"{LOCAL_DATA}/provided/documents/000.json.gz"
         experiment_name = "test"

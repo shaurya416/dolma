@@ -293,6 +293,23 @@ class TestPaths(TestCase):
         self.assertEqual(split_glob(path), ("/no/glob/here", ""))
 
 
+class TestMakeRelativeNested(TestCase):
+    def test_deeper_path_first(self):
+        # the shared root must not depend on the order of the paths, even when the root of a
+        # later path is a prefix of the root of the first one.
+        for paths in (
+            ["/data/documents/sub/*.json.gz", "/data/documents/*.json.gz"],
+            ["/data/documents/*.json.gz", "/data/documents/sub/*.json.gz"],
+        ):
+            base, relative_paths = make_relative(paths)
+            self.assertEqual(base, "/data/documents")
+            self.assertEqual(relative_paths, [sub_prefix(p, "/data/documents") for p in paths])
+
+        base, relative_paths = make_relative(["s3://bucket/documents/sub/*.gz", "s3://bucket/documents/*.gz"])
+        self.assertEqual(base, "s3://bucket/documents")
+        self.assertEqual(relative_paths, ["sub/*.gz", "*.gz"])
+
+
 class TestSplitExt(TestCase):
     def test_file(self):
 

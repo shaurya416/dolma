@@ -142,7 +142,9 @@ def group_paths_by_max_size(
 
         # partition in groups of max_num_files
         for path, _ in sorted(counts.items(), key=lambda x: -x[1]):
-            if sum(p.size for p in grouped_paths[-1]) + path.size > max_size_bytes:
+            # a path larger than max_size_bytes goes into the current group if it is still empty,
+            # so that no group is left without paths.
+            if grouped_paths[-1] and sum(p.size for p in grouped_paths[-1]) + path.size > max_size_bytes:
                 grouped_paths.append([path])
             else:
                 grouped_paths[-1].append(path)
@@ -422,6 +424,7 @@ class ReshardingConfig:
             max_num_files=(int(n) if (n := d.get("max_num_files")) is not None else None),
             max_workers=int(d.get("max_workers", 1)),
             random_seed=int(d.get("random_seed", 42)),
+            tokenizer_name_or_path=str(d.get("tokenizer_name_or_path", "allenai/dolma2-tokenizer")),
         )
 
     @classmethod

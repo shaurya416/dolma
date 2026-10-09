@@ -11,9 +11,15 @@ import smart_open
 
 from dolma.cli.__main__ import main as cli_main
 from dolma.tokenizer import Tokenizer
-from dolma.tokenizer.reshard import ReshardingConfig, reshard
+from dolma.tokenizer.reshard import (
+    ReshardingConfig,
+    TokensMetadataPaths,
+    group_paths_by_max_size,
+    reshard,
+)
 
 DOLMA2_TOKENIZER = Path(__file__).parent.parent / "data" / "tokenizer" / "dolma2-test-tokenizer.json"
+GPT_NEO_TOKENIZER = Path(__file__).parent.parent / "data" / "tokenizer" / "gpt-neo-test-tokenizer.json"
 
 
 class Sequence(NamedTuple):
@@ -24,13 +30,14 @@ class Sequence(NamedTuple):
 
 
 class BaseTestResharding(unittest.TestCase):
-    def _read_all_sequences(self, dir: Path) -> list[Sequence]:
+    def _read_all_sequences(self, dir: Path, dtype: type = np.uint32) -> list[Sequence]:
 
         sequences: list[Sequence] = []
 
         # check if contents are the same. order might be different so make you have to fetch metadata and compare
         for npy_path in dir.rglob("*.npy"):
-            arr = np.memmap(npy_path, mode="r", dtype=np.uint32, shape=(npy_path.stat().st_size // 4,))
+            itemsize = np.dtype(dtype).itemsize
+            arr = np.memmap(npy_path, mode="r", dtype=dtype, shape=(npy_path.stat().st_size // itemsize,))
             csv_path = npy_path.with_suffix(".csv.gz")
             with smart_open.open(csv_path, "r") as f:
                 for row in csv.reader(f):
@@ -44,7 +51,7 @@ class BaseTestResharding(unittest.TestCase):
                     sequences.append(sequence)
         return sequences
 
-    def _check_equal(self, input_dir: Path, output_dir: Path):
+    def _check_equal(self, input_dir: Path, output_dir: Path, dtype: type = np.uint32):
         # check if size of npy files in input dir is less than target size
         input_dir_size = sum(f.stat().st_size for f in input_dir.rglob("*.npy"))
         output_dir_size = sum(f.stat().st_size for f in output_dir.rglob("*.npy"))
@@ -67,8 +74,8 @@ class BaseTestResharding(unittest.TestCase):
         print(f"Found {input_csv_rows} csv rows in {input_dir}")
         print(f"Found {output_csv_rows} csv rows in {output_dir}")
 
-        input_sequences = self._read_all_sequences(input_dir)
-        output_sequences = self._read_all_sequences(output_dir)
+        input_sequences = self._read_all_sequences(input_dir, dtype=dtype)
+        output_sequences = self._read_all_sequences(output_dir, dtype=dtype)
 
         print(f"Found {len(input_sequences)} sequences in {input_dir}")
         print(f"Found {len(output_sequences)} sequences in {output_dir}")
@@ -92,6 +99,7 @@ class TestSynthResharding(BaseTestResharding):
         path: str,
         doc_contents: list[list[int]],
         doc_name: str,
+        dtype: type = np.uint32,
     ):
         csv_path = Path(path).with_suffix(".csv.gz")
         npy_path = Path(path).with_suffix(".npy")
@@ -101,7 +109,7 @@ class TestSynthResharding(BaseTestResharding):
         with smart_open.open(csv_path, "w") as f:
             writer = csv.writer(f)
             total_length = sum(len(seq) for seq in doc_contents)
-            memmap_file = np.memmap(npy_path, mode="w+", shape=(total_length,), dtype=np.uint32)
+            memmap_file = np.memmap(npy_path, mode="w+", shape=(total_length,), dtype=dtype)
 
             current_offset = 0
             for i, seq in enumerate(doc_contents):
@@ -166,6 +174,69 @@ class TestSynthResharding(BaseTestResharding):
         output_dir_size = sum(f.stat().st_size for f in output_dir.rglob("*.npy"))
         self.assertEqual(input_dir_size, output_dir_size)
         self._check_equal(input_dir, output_dir)
+
+    def test_config_tokenizer_is_used(self):
+        # shards written with a 16-bit tokenizer must be merged as 16-bit tokens; the tokenizer
+        # named in the configuration decides the dtype.
+        for i, doc_contents in enumerate([[[1, 2, 3], [4, 5]], [[6, 7, 8, 9], [10, 11, 12]]]):
+            self.make_memmap_and_csv(
+                path=f"{self.tmp_dir}/input/{i:03d}",
+                doc_contents=doc_contents,
+                doc_name=f"d{i:03d}",
+                dtype=np.uint16,
+            )
+
+        input_dir = Path(self.tmp_dir) / "input"
+        output_dir = Path(self.tmp_dir) / "output"
+
+        config = ReshardingConfig.from_dict(
+            {
+                "source_prefixes": [{"prefix": str(input_dir), "sample_rate": 1.0}],
+                "destination_prefix": str(output_dir),
+                "max_num_files": 1,
+                "tokenizer_name_or_path": str(GPT_NEO_TOKENIZER),
+            }
+        )
+        self.assertEqual(config.tokenizer_name_or_path, str(GPT_NEO_TOKENIZER))
+
+        reshard(config)
+        self._check_equal(input_dir, output_dir, dtype=np.uint16)
+
+    def test_resharding_file_larger_than_max_size(self):
+        # a shard bigger than max_size_bytes cannot be split; it must end up in a group of its own
+        for i, doc_contents in enumerate([[[1, 2, 3, 4, 5], [6, 7, 8]], [[9, 10, 11, 12]]]):
+            self.make_memmap_and_csv(
+                path=f"{self.tmp_dir}/input/{i:03d}",
+                doc_contents=doc_contents,
+                doc_name=f"d{i:03d}",
+            )
+
+        input_dir = Path(self.tmp_dir) / "input"
+        output_dir = Path(self.tmp_dir) / "output"
+
+        config = ReshardingConfig.from_dict(
+            {
+                "source_prefixes": [{"prefix": str(input_dir), "sample_rate": 1.0}],
+                "destination_prefix": str(output_dir),
+                "max_size_bytes": 8,
+                "tokenizer_name_or_path": str(DOLMA2_TOKENIZER),
+            }
+        )
+        reshard(config)
+
+        self.assertEqual(len(list(output_dir.rglob("*.npy"))), 2)
+        self._check_equal(input_dir, output_dir)
+
+    def test_group_paths_by_max_size_no_empty_groups(self):
+        paths = []
+        for i, doc_contents in enumerate([[[1, 2, 3, 4, 5]], [[6, 7]], [[8, 9, 10]]]):
+            path = f"{self.tmp_dir}/input/{i:03d}"
+            self.make_memmap_and_csv(path=path, doc_contents=doc_contents, doc_name=f"d{i:03d}")
+            paths.append(TokensMetadataPaths(f"{path}.npy", f"{path}.csv.gz"))
+
+        groups = group_paths_by_max_size(paths, max_size_bytes=4)
+        self.assertEqual(sorted(p.npy_path for group in groups for p in group), [p.npy_path for p in paths])
+        self.assertTrue(all(len(group) > 0 for group in groups))
 
 
 class TestEndToEndResharding(BaseTestResharding):
