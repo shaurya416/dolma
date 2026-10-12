@@ -138,6 +138,24 @@ class TestRuntimeUtilities(TestCase):
                     self.assertEqual(value[0][0], 0)
                     self.assertEqual(value[0][1], len(d["text"]))
 
+    def test_metadata_as_list(self):
+        with TemporaryDirectory() as temp_dir:
+            destination = Path(temp_dir) / "out"
+            metadata = Path(temp_dir) / "metadata"
+
+            # one metadata location per documents path, as an alternative to a single prefix
+            create_and_run_tagger(
+                documents=[f"{LOCAL_DATA}/provided/documents/000.json.gz"],
+                destination=str(destination),
+                metadata=[str(metadata)],
+                taggers=["c4_v1"],
+                experiment="test",
+                debug=True,
+            )
+
+            self.assertTrue((destination / "test" / "000.json.gz").exists())
+            self.assertTrue((metadata / "000.json.gz.done.txt").exists())
+
     def test_alt_src(self):
         taggers = ["c4_v1"]
         experiment_name = "test"

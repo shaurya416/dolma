@@ -61,3 +61,20 @@ class TestParallel(TestCase):
             dest = [p for p in os.listdir(f"{d}/destination")]
             self.assertEqual(sorted(src), sorted(meta))
             self.assertEqual(sorted(src), sorted(dest))
+
+    def test_rerun_with_all_files_processed(self):
+        with TemporaryDirectory() as d:
+            kwargs = dict(
+                source_prefix=str(LOCAL_DATA / "expected" / "*-paragraphs.*"),
+                destination_prefix=f"{d}/destination",
+                metadata_prefix=f"{d}/metadata",
+                ignore_existing=False,
+            )
+            MockProcessor(**kwargs)()
+            dest = sorted(os.listdir(f"{d}/destination"))
+            meta = sorted(os.listdir(f"{d}/metadata"))
+
+            # every file has a metadata file now, so a second run has nothing to do and must succeed
+            MockProcessor(**kwargs)()
+            self.assertEqual(sorted(os.listdir(f"{d}/destination")), dest)
+            self.assertEqual(sorted(os.listdir(f"{d}/metadata")), meta)

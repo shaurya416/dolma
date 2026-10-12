@@ -1,5 +1,6 @@
 import copy
 import csv
+import gzip
 import json
 import shutil
 from contextlib import ExitStack
@@ -14,7 +15,7 @@ from tokenizers import Tokenizer as BaseTokenizer
 from typing_extensions import TypedDict
 
 from dolma.cli.__main__ import main
-from dolma.tokenizer import Tokenizer, tokenize_in_parallel
+from dolma.tokenizer import Tokenizer, tokenize_file, tokenize_in_parallel
 from dolma.tokenizer.data_types import TokenizerOutput
 from dolma.tokenizer.memmap_writer import MemmapWriter
 
@@ -771,3 +772,44 @@ class TestMemmapWriterLimits(TestCase):
                 # ... but one that cannot fit in any file must not be deferred forever
                 with self.assertRaises(ValueError):
                     writer.write(too_long)
+
+
+class TestTokenizeCorruptInput(TestCase):
+    def _write_truncated_file(self, path: Path, num_docs: int = 2000) -> None:
+        raw = "".join(
+            json.dumps({"id": f"doc-{i}", "text": f"document number {i} " * 20}) + "\n" for i in range(num_docs)
+        )
+        compressed = gzip.compress(raw.encode("utf-8"))
+        # an interrupted download: the gzip stream ends before its end-of-stream marker
+        path.write_bytes(compressed[: len(compressed) // 2])
+
+    def test_truncated_file_raises(self):
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "000.json.gz"
+            self._write_truncated_file(path)
+
+            with self.assertRaises(EOFError):
+                for _ in tokenize_file(
+                    tokenizer_name_or_path=GPT_NEO_TOKENIZER["filename"],
+                    path=str(path),
+                    eos_token_id=GPT_NEO_TOKENIZER["eos_token_id"],
+                    pad_token_id=GPT_NEO_TOKENIZER["pad_token_id"],
+                ):
+                    pass
+
+    def test_tokenize_in_parallel_truncated_file_raises(self):
+        with TemporaryDirectory() as input_dir, TemporaryDirectory() as output_dir:
+            self._write_truncated_file(Path(input_dir) / "000.json.gz")
+
+            # the documents after the point of truncation must not be dropped from a run that succeeds
+            with self.assertRaises(EOFError):
+                tokenize_in_parallel(
+                    sources=[f"{input_dir}/*.json.gz"],
+                    destination=output_dir,
+                    tokenizer_name_or_path=GPT_NEO_TOKENIZER["filename"],
+                    bos_token_id=GPT_NEO_TOKENIZER["bos_token_id"],
+                    eos_token_id=GPT_NEO_TOKENIZER["eos_token_id"],
+                    pad_token_id=GPT_NEO_TOKENIZER["pad_token_id"],
+                    metadata_dir=f"{output_dir}/metadata",
+                    debug=True,
+                )

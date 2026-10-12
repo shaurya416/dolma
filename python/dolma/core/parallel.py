@@ -510,6 +510,10 @@ class BaseParallelProcessor:
 
         print(f"Found {len(all_paths.src):,} files to process")
 
+        if not all_paths.src:
+            # every file is already processed or filtered out; a pool cannot be started with zero processes
+            return
+
         fn = self._debug_run_all if self.debug else self._multiprocessing_run_all
 
         fn(

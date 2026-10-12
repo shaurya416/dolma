@@ -502,3 +502,4 @@ def tokenize_file(
     except Exception as ex:
         # more catastrophic error, so we log the error and re-raise
         logger.error("Error processing file %s", path, exc_info=ex)
+        raise

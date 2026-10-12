@@ -461,30 +461,28 @@ def create_and_run_tagger(
         except Exception as exp:
             raise RuntimeError(f"Could not make metadata paths from prefix {metadata}") from exp
 
-        tagger_processor = TaggerProcessor(
-            source_prefix=documents,
-            destination_prefix=destination,
-            metadata_prefix=metadata,
-            debug=debug or profile_enable,  # if profile is true, debug must be true
-            seed=seed,
-            ignore_existing=ignore_existing,
-            retries_on_error=retries_on_error,
-            num_processes=num_processes,
+    tagger_processor = TaggerProcessor(
+        source_prefix=documents,
+        destination_prefix=destination,
+        metadata_prefix=metadata,
+        debug=debug or profile_enable,  # if profile is true, debug must be true
+        seed=seed,
+        ignore_existing=ignore_existing,
+        retries_on_error=retries_on_error,
+        num_processes=num_processes,
+    )
+
+    with ExitStack() as stack:
+        if profile_enable:
+            # start profiling
+            stack.enter_context(profiler(output=profile_output, sort_key=profile_sort_key, lines=profile_lines))
+
+        stack.enter_context(delete_placeholder_attributes(tagger_destinations=destination))
+
+        tagger_processor(
+            experiment_name=experiment,
+            taggers_names=taggers,
+            taggers_modules=taggers_modules,
+            skip_on_failure=skip_on_failure,
+            steps=profile_steps,
         )
-
-        with ExitStack() as stack:
-            if profile_enable:
-                # start profiling
-                stack.enter_context(
-                    profiler(output=profile_output, sort_key=profile_sort_key, lines=profile_lines)
-                )
-
-            stack.enter_context(delete_placeholder_attributes(tagger_destinations=destination))
-
-            tagger_processor(
-                experiment_name=experiment,
-                taggers_names=taggers,
-                taggers_modules=taggers_modules,
-                skip_on_failure=skip_on_failure,
-                steps=profile_steps,
-            )
