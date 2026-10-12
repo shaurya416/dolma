@@ -15,6 +15,8 @@ from typing_extensions import TypedDict
 
 from dolma.cli.__main__ import main
 from dolma.tokenizer import Tokenizer, tokenize_in_parallel
+from dolma.tokenizer.data_types import TokenizerOutput
+from dolma.tokenizer.memmap_writer import MemmapWriter
 
 TEST_DIR = Path(__file__).parent.parent.resolve()
 
@@ -721,3 +723,51 @@ class TestDtypeMismatch(TestCase):
                 destination=tmpdir,
                 dtype="uint16",
             )
+
+
+class TestMemmapWriterLimits(TestCase):
+    def test_no_tokens_written_leaves_no_files(self):
+        with TemporaryDirectory() as tmpdir:
+            with MemmapWriter(path=f"{tmpdir}/part-0-00000", dtype=numpy.dtype("uint16"), max_tokens=1024):
+                pass
+
+            # a memmap of max_tokens zeros would read as 1024 real token ids
+            self.assertEqual(sorted(p.name for p in Path(tmpdir).iterdir()), [])
+
+    def test_tokenize_only_empty_documents(self):
+        with TemporaryDirectory() as input_dir, TemporaryDirectory() as output_dir:
+            with smart_open.open(f"{input_dir}/000.json.gz", "wt", encoding="utf-8") as f:
+                for i in range(3):
+                    f.write(json.dumps({"id": f"doc-{i}", "text": "  \n "}) + "\n")
+
+            config = {
+                "documents": [f"{input_dir}/*.json.gz"],
+                "destination": output_dir,
+                "tokenizer": {
+                    "name_or_path": GPT_NEO_TOKENIZER["filename"],
+                    "eos_token_id": GPT_NEO_TOKENIZER["eos_token_id"],
+                    "pad_token_id": GPT_NEO_TOKENIZER["pad_token_id"],
+                },
+                "max_size": 4096,
+                "processes": 1,
+                "debug": True,
+            }
+            with NamedTemporaryFile(mode="wt") as f:
+                json.dump(config, f)
+                f.flush()
+                main(argv=["-c", f.name, "tokens"])
+
+            self.assertEqual(sorted(p.name for p in Path(output_dir).glob("*.npy")), [])
+
+    def test_sequence_longer_than_max_tokens_raises(self):
+        with TemporaryDirectory() as tmpdir:
+            with MemmapWriter(path=f"{tmpdir}/part-0-00000", dtype=numpy.dtype("uint16"), max_tokens=8) as writer:
+                fits = TokenizerOutput.from_tokens(id="a", src="src", loc=1, tokens=[1, 2, 3, 4, 5])
+                too_long = TokenizerOutput.from_tokens(id="b", src="src", loc=2, tokens=list(range(8)))
+
+                self.assertTrue(writer.write(fits))
+                # a sequence that would fit in a new file is deferred to it ...
+                self.assertFalse(writer.write(fits))
+                # ... but one that cannot fit in any file must not be deferred forever
+                with self.assertRaises(ValueError):
+                    writer.write(too_long)

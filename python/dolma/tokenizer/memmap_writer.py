@@ -74,6 +74,14 @@ class MemmapWriter:
         if self._metadata_file is None:
             raise RuntimeError("Metadata file is not open")
 
+        if len(output.tokens) >= self.max_tokens:
+            # this sequence would not fit even in an empty memmap file, so opening a new file
+            # for it (as callers do when this method returns False) would never succeed.
+            raise ValueError(
+                f"Sequence {output.id} from {output.src} has {len(output.tokens):,} tokens, which does not fit "
+                f"in a memmap file of at most {self.max_tokens:,} tokens; increase the maximum file size."
+            )
+
         if (len(output.tokens) + self._written_tokens) >= self.max_tokens:
             # return false if the memmap file is full
             return False
@@ -175,8 +183,17 @@ class MemmapWriter:
             self.flush()
             self._metadata_file.close()
 
-            # we resize the memmap to the number of tokens actually written
-            if self._written_tokens < self.max_tokens and self._written_tokens > 0:
+            if self._written_tokens == 0:
+                # nothing was written: remove the files instead of leaving a memmap of max_tokens zeros,
+                # which would read as max_tokens real token ids, next to empty metadata.
+                del self._memmap_file
+                os.remove(self._local_metadata_path)
+                if not self.is_remote_path:
+                    # for remote paths, the local memmap is removed below
+                    os.remove(self._local_memmap_path)
+                log.warning(f"No tokens were written to {self.memmap_path}; the file was not created")
+            elif self._written_tokens < self.max_tokens:
+                # we resize the memmap to the number of tokens actually written
                 del self._memmap_file
                 os.rename(self._local_memmap_path, (temp_path := self._local_memmap_path.with_suffix(".tmp")))
                 new_memmap = np.memmap(
@@ -188,7 +205,7 @@ class MemmapWriter:
                 log.info(f"Resized memmap file from {old_memmap.nbytes:,} to {new_memmap.nbytes:,} bytes")
                 os.remove(temp_path)
 
-            if self.is_remote_path:
+            if self.is_remote_path and self._written_tokens > 0:
                 with ExitStack() as stack:
                     f = stack.enter_context(smart_open.open(self._local_memmap_path, "rb"))
                     g = stack.enter_context(smart_open.open(self.memmap_path, mode="wb"))

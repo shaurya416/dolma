@@ -360,6 +360,10 @@ class ReshardingPrefixConfig:
                     csv_path = os.path.join(root, file.replace(".npy", ".csv.gz"))
                     paths.append(TokensMetadataPaths(npy_path, csv_path))
 
+        if len(paths) == 0:
+            # a misspelled or empty prefix would otherwise drop this source from the output without error
+            raise FileNotFoundError(f"No .npy files found under source prefix {self.prefix}")
+
         new_paths = []
 
         # if the multiplier k is > 1, we first take ⌊k⌋ copies of each path.

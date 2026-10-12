@@ -227,6 +227,24 @@ class TestSynthResharding(BaseTestResharding):
         self.assertEqual(len(list(output_dir.rglob("*.npy"))), 2)
         self._check_equal(input_dir, output_dir)
 
+    def test_missing_source_prefix_raises(self):
+        # a source prefix with no shards (e.g. a misspelled path) must not be silently left out of the output
+        self.make_memmap_and_csv(path=f"{self.tmp_dir}/input/000", doc_contents=[[1, 2, 3]], doc_name="d000")
+
+        config = ReshardingConfig.from_dict(
+            {
+                "source_prefixes": [
+                    {"prefix": f"{self.tmp_dir}/input", "sample_rate": 1.0},
+                    {"prefix": f"{self.tmp_dir}/inptu", "sample_rate": 1.0},
+                ],
+                "destination_prefix": f"{self.tmp_dir}/output",
+                "max_num_files": 1,
+                "tokenizer_name_or_path": str(DOLMA2_TOKENIZER),
+            }
+        )
+        with self.assertRaises(FileNotFoundError):
+            reshard(config)
+
     def test_group_paths_by_max_size_no_empty_groups(self):
         paths = []
         for i, doc_contents in enumerate([[[1, 2, 3, 4, 5]], [[6, 7]], [[8, 9, 10]]]):
